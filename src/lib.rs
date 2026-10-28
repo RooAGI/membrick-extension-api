@@ -153,6 +153,193 @@ impl fmt::Display for ToolId {
     }
 }
 
+/// Owned extension identity for runtime metadata.
+///
+/// Unlike [`ExtensionId`], this value can be created from a verified manifest
+/// and does not borrow a static string. It is metadata only; it does not make
+/// extension code executable or registered for dispatch.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct OwnedExtensionId(String);
+
+impl OwnedExtensionId {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, OwnedIdentifierError> {
+        let value = value.into();
+        validate_owned_identifier(&value, "extension")?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OwnedExtensionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Owned tool identity for signed runtime declarations.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct OwnedToolId(String);
+
+impl OwnedToolId {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, OwnedIdentifierError> {
+        let value = value.into();
+        validate_owned_identifier(&value, "tool")?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OwnedToolId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Owned capability identity used to validate dynamic metadata dependencies.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct OwnedCapabilityId(String);
+
+impl OwnedCapabilityId {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, OwnedIdentifierError> {
+        let value = value.into();
+        validate_owned_identifier(&value, "capability")?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OwnedCapabilityId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+const MAX_OWNED_IDENTIFIER_BYTES: usize = 128;
+
+fn validate_owned_identifier(value: &str, kind: &'static str) -> Result<(), OwnedIdentifierError> {
+    let mut bytes = value.bytes();
+    let valid_first = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric());
+    if value.is_empty()
+        || value.len() > MAX_OWNED_IDENTIFIER_BYTES
+        || !valid_first
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+        || !value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        return Err(OwnedIdentifierError { kind });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnedIdentifierError {
+    kind: &'static str,
+}
+
+impl fmt::Display for OwnedIdentifierError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid {} identifier", self.kind)
+    }
+}
+
+impl Error for OwnedIdentifierError {}
+
+/// One signed, generic tool declaration. The schema is represented as JSON
+/// data and must be an object; this type contains no executable handler.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedToolDescriptor {
+    pub id: OwnedToolId,
+    pub description: String,
+    #[serde(rename = "input_schema")]
+    pub input_schema: Value,
+}
+
+impl OwnedToolDescriptor {
+    pub fn new(
+        id: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Result<Self, OwnedIdentifierError> {
+        Ok(Self {
+            id: OwnedToolId::try_new(id)?,
+            description: description.into(),
+            input_schema,
+        })
+    }
+}
+
+/// Owned, executable-free extension metadata for a future runtime registry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnedExtensionDescriptor {
+    id: OwnedExtensionId,
+    provides: Vec<OwnedCapabilityId>,
+    requires: Vec<OwnedCapabilityId>,
+    tools: Vec<OwnedToolDescriptor>,
+}
+
+impl OwnedExtensionDescriptor {
+    pub fn new(
+        id: impl Into<String>,
+        provides: Vec<String>,
+        requires: Vec<String>,
+        tools: Vec<OwnedToolDescriptor>,
+    ) -> Result<Self, OwnedIdentifierError> {
+        Ok(Self {
+            id: OwnedExtensionId::try_new(id)?,
+            provides: provides
+                .into_iter()
+                .map(OwnedCapabilityId::try_new)
+                .collect::<Result<_, _>>()?,
+            requires: requires
+                .into_iter()
+                .map(OwnedCapabilityId::try_new)
+                .collect::<Result<_, _>>()?,
+            tools,
+        })
+    }
+
+    pub fn id(&self) -> &OwnedExtensionId {
+        &self.id
+    }
+
+    pub fn provides(&self) -> &[OwnedCapabilityId] {
+        &self.provides
+    }
+
+    pub fn requires(&self) -> &[OwnedCapabilityId] {
+        &self.requires
+    }
+
+    pub fn tools(&self) -> &[OwnedToolDescriptor] {
+        &self.tools
+    }
+}
+
 /// Stable identifier for one HTTP route exposed by an extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RouteId(&'static str);
@@ -269,6 +456,12 @@ impl ExtensionRouteMatch {
         self.mutates
     }
 
+    /// Host adapters serialize every extension route because a handler can
+    /// mutate through its context even when route metadata says otherwise.
+    pub const fn requires_serialization(&self) -> bool {
+        true
+    }
+
     pub fn path_params(&self) -> &std::collections::BTreeMap<String, String> {
         &self.path_params
     }
@@ -330,13 +523,29 @@ pub struct InvocationIdentity<'a> {
     pub provider: &'a str,
     /// Optional trusted agent or principal identifier.
     pub principal: Option<&'a str>,
+    /// Extension that immediately invoked this extension, when applicable.
+    /// The registry supplies this value; tool arguments do not.
+    pub caller_extension: Option<ExtensionId>,
 }
 
 impl InvocationIdentity<'_> {
     pub const UNKNOWN: Self = Self {
         provider: "unknown",
         principal: None,
+        caller_extension: None,
     };
+}
+
+/// Opaque namespace token created only by the registry for one extension.
+pub struct ExtensionScope {
+    extension_id: ExtensionId,
+}
+
+impl ExtensionScope {
+    /// Extension whose documents are visible through this scope.
+    pub const fn extension_id(&self) -> ExtensionId {
+        self.extension_id
+    }
 }
 
 /// Host-provided document access bound to one owner/workspace operation.
@@ -402,6 +611,9 @@ pub trait ExtensionContext {
         InvocationIdentity::UNKNOWN
     }
     fn documents(&mut self) -> &mut dyn ScopedDocumentStore;
+    /// Host hook used by the registry to select an extension-specific document
+    /// namespace. Extensions cannot construct this scope token.
+    fn scoped_documents(&mut self, scope: &ExtensionScope) -> &mut dyn ScopedDocumentStore;
     fn invoke(
         &mut self,
         capability: CapabilityId,
@@ -483,14 +695,13 @@ pub trait ExtensionHandler: Sync {
     fn invoke(
         &self,
         _context: &mut dyn ExtensionContext,
-        capability: CapabilityId,
-        operation: &str,
+        _capability: CapabilityId,
+        _operation: &str,
         _input: Value,
     ) -> Result<Value, ExtensionError> {
-        Err(ExtensionError::new(format!(
-            "extension does not implement operation `{operation}` for capability `{}`",
-            capability.as_str()
-        )))
+        Err(ExtensionError::new(
+            "extension does not implement the requested capability operation",
+        ))
     }
 }
 
@@ -517,10 +728,52 @@ pub struct ExtensionRegistry {
     ordered: Vec<&'static ExtensionRegistration>,
     tools: HashMap<ToolId, &'static ExtensionRegistration>,
     capabilities: HashMap<CapabilityId, &'static ExtensionRegistration>,
+    approved_capabilities: HashMap<ExtensionId, BTreeSet<CapabilityId>>,
     tool_definitions: Vec<ToolDefinition>,
     routes: Vec<RegisteredRoute>,
     routes_by_id: HashMap<RouteId, usize>,
     lifecycle: Mutex<LifecycleState>,
+}
+
+struct RegistryInvocationContext<'a> {
+    inner: &'a mut dyn ExtensionContext,
+    registry: &'a ExtensionRegistry,
+    executing_extension: ExtensionId,
+    caller_extension: Option<ExtensionId>,
+    scope: ExtensionScope,
+}
+
+impl ExtensionContext for RegistryInvocationContext<'_> {
+    fn owner(&self) -> &str {
+        self.inner.owner()
+    }
+    fn workspace(&self) -> &str {
+        self.inner.workspace()
+    }
+    fn session_id(&self) -> Option<&str> {
+        self.inner.session_id()
+    }
+    fn invocation_identity(&self) -> InvocationIdentity<'_> {
+        let mut identity = self.inner.invocation_identity();
+        identity.caller_extension = self.caller_extension;
+        identity
+    }
+    fn documents(&mut self) -> &mut dyn ScopedDocumentStore {
+        self.inner.scoped_documents(&self.scope)
+    }
+    fn scoped_documents(&mut self, scope: &ExtensionScope) -> &mut dyn ScopedDocumentStore {
+        self.inner.scoped_documents(scope)
+    }
+    fn invoke(
+        &mut self,
+        capability: CapabilityId,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, ExtensionError> {
+        let registry = self.registry;
+        let caller = self.executing_extension;
+        registry.invoke_from(self, caller, capability, operation, input)
+    }
 }
 
 struct RegisteredRoute {
@@ -652,6 +905,30 @@ impl ExtensionRegistry {
     /// example in an embedded application that does not use link-time
     /// collection.
     pub fn new(registrations: Vec<&'static ExtensionRegistration>) -> Result<Self, RegistryError> {
+        // Linked native registrations are part of the trusted executable
+        // composition. Their declared dependency edges are therefore the
+        // host-approved grants for this static-only path. This does not load
+        // or sandbox extensions. Runtime admission uses the explicit policy
+        // constructor below.
+        let approved_capabilities = registrations
+            .iter()
+            .map(|registration| {
+                (
+                    registration.descriptor.id,
+                    registration.descriptor.requires.iter().copied().collect(),
+                )
+            })
+            .collect();
+        Self::new_with_approved_capabilities(registrations, approved_capabilities)
+    }
+
+    /// Validate registrations using a host-owned capability grant set.
+    /// A nested capability call must be both declared by its caller and
+    /// present in this approval map.
+    pub fn new_with_approved_capabilities(
+        registrations: Vec<&'static ExtensionRegistration>,
+        approved_capabilities: HashMap<ExtensionId, BTreeSet<CapabilityId>>,
+    ) -> Result<Self, RegistryError> {
         let mut extension_ids = BTreeSet::new();
         let mut capabilities = HashMap::new();
         let mut tools = HashMap::new();
@@ -923,6 +1200,7 @@ impl ExtensionRegistry {
             ordered: sorted,
             tools,
             capabilities,
+            approved_capabilities,
             tool_definitions,
             routes,
             routes_by_id,
@@ -1060,10 +1338,15 @@ impl ExtensionRegistry {
             .map(|(_, registration)| registration.descriptor.id)
     }
 
-    /// Mutation classification supplied by the owning extension.
+    /// Whether a registered extension tool requires serialized execution.
+    ///
+    /// Extension metadata cannot opt out of serialization: all extension
+    /// calls are treated as potentially mutating by the host.
     pub fn tool_is_mutating_name(&self, name: &str) -> Option<bool> {
-        let (tool, registration) = self.tools.iter().find(|(tool, _)| tool.as_str() == name)?;
-        Some(registration.handler.tool_is_mutating(*tool))
+        self.tools
+            .keys()
+            .find(|tool| tool.as_str() == name)
+            .map(|_| true)
     }
 
     /// Ask the owning extension for an opaque notification after a successful
@@ -1131,10 +1414,36 @@ impl ExtensionRegistry {
             ));
         }
         request.path_params = route.path_params.clone();
-        registered
-            .registration
-            .handler
-            .handle_http(context, registered.descriptor.id, request)
+        let extension_id = registered.registration.descriptor.id;
+        tracing::info!(
+            event = "extension_invocation",
+            extension_id = extension_id.as_str(),
+            caller_extension = "host",
+            invocation_kind = "http_route",
+            operation = registered.descriptor.id.as_str(),
+            decision = "allow",
+            result = "started"
+        );
+        let mut scoped = RegistryInvocationContext {
+            inner: context,
+            registry: self,
+            executing_extension: extension_id,
+            caller_extension: None,
+            scope: ExtensionScope { extension_id },
+        };
+        let result = registered.registration.handler.handle_http(
+            &mut scoped,
+            registered.descriptor.id,
+            request,
+        );
+        log_extension_result(
+            extension_id,
+            None,
+            "http_route",
+            LoggedOperation::Static(registered.descriptor.id.as_str()),
+            &result,
+        );
+        result
     }
 
     /// Complete tool definitions for registered extensions.
@@ -1164,7 +1473,7 @@ impl ExtensionRegistry {
         let registration = self.tools.get(&tool).ok_or_else(|| {
             ExtensionError::new(format!("unknown extension tool `{}`", tool.as_str()))
         })?;
-        registration.handler.call(context, tool, input)
+        self.call_as(context, registration, tool, input)
     }
 
     /// Dispatch a tool name received from a transport.
@@ -1179,27 +1488,227 @@ impl ExtensionRegistry {
             .iter()
             .find(|(tool, _)| tool.as_str() == name)
             .ok_or_else(|| ExtensionError::new(format!("unknown extension tool `{name}`")))?;
-        registration.handler.call(context, *tool, input)
+        self.call_as(context, registration, *tool, input)
+    }
+
+    fn call_as(
+        &self,
+        context: &mut dyn ExtensionContext,
+        registration: &'static ExtensionRegistration,
+        tool: ToolId,
+        input: Value,
+    ) -> Result<Value, ExtensionError> {
+        let extension_id = registration.descriptor.id;
+        tracing::info!(
+            event = "extension_invocation",
+            extension_id = extension_id.as_str(),
+            caller_extension = "host",
+            invocation_kind = "tool",
+            operation = tool.as_str(),
+            decision = "allow",
+            result = "started"
+        );
+        let mut scoped = RegistryInvocationContext {
+            inner: context,
+            registry: self,
+            executing_extension: extension_id,
+            caller_extension: None,
+            scope: ExtensionScope { extension_id },
+        };
+        let result = registration.handler.call(&mut scoped, tool, input);
+        log_extension_result(
+            extension_id,
+            None,
+            "tool",
+            LoggedOperation::Static(tool.as_str()),
+            &result,
+        );
+        result
+    }
+
+    fn invoke_from(
+        &self,
+        context: &mut dyn ExtensionContext,
+        caller: ExtensionId,
+        capability: CapabilityId,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, ExtensionError> {
+        let caller_registration = self
+            .ordered
+            .iter()
+            .find(|registration| registration.descriptor.id == caller)
+            .copied()
+            .ok_or_else(|| ExtensionError::new("calling extension is not registered"))?;
+        let declared = caller_registration
+            .descriptor
+            .requires
+            .contains(&capability);
+        let approved = self
+            .approved_capabilities
+            .get(&caller)
+            .is_some_and(|grants| grants.contains(&capability));
+        if !declared || !approved {
+            tracing::warn!(
+                event = "extension_capability_invocation",
+                caller_extension = caller.as_str(),
+                capability = capability.as_str(),
+                operation = capability_operation_label(operation),
+                decision = "deny",
+                result = "denied",
+                reason = if !declared {
+                    "undeclared"
+                } else {
+                    "not_approved"
+                }
+            );
+            return Err(ExtensionError::with_kind(
+                ExtensionErrorKind::Forbidden,
+                format!("extension `{caller}` is not authorized for capability `{capability}`"),
+            ));
+        }
+        let provider = self.capabilities.get(&capability).copied().ok_or_else(|| {
+            ExtensionError::new(format!("unknown extension capability `{capability}`"))
+        })?;
+        let provider_id = provider.descriptor.id;
+        tracing::info!(
+            event = "extension_capability_invocation",
+            caller_extension = caller.as_str(),
+            target_extension = provider_id.as_str(),
+            capability = capability.as_str(),
+            operation = capability_operation_label(operation),
+            decision = "allow",
+            result = "started"
+        );
+        let mut scoped = RegistryInvocationContext {
+            inner: context,
+            registry: self,
+            executing_extension: provider_id,
+            caller_extension: Some(caller),
+            scope: ExtensionScope {
+                extension_id: provider_id,
+            },
+        };
+        let result = provider
+            .handler
+            .invoke(&mut scoped, capability, operation, input);
+        log_extension_result(
+            provider_id,
+            Some(caller),
+            "capability",
+            LoggedOperation::Capability(capability),
+            &result,
+        );
+        result
     }
 
     /// Invoke an operation through the provider of a named capability.
+    ///
+    /// This context-free entry point is intentionally denied: only a
+    /// registry-created invocation frame can establish an extension caller.
+    /// Extensions should call through [`ExtensionContext::invoke`]. Trusted
+    /// host code that needs to start a capability invocation can use
+    /// [`Self::invoke_from_host`].
     pub fn invoke(
+        &self,
+        _context: &mut dyn ExtensionContext,
+        _capability: CapabilityId,
+        _operation: &str,
+        _input: Value,
+    ) -> Result<Value, ExtensionError> {
+        Err(ExtensionError::with_kind(
+            ExtensionErrorKind::Forbidden,
+            "capability invocation requires a registry-created caller frame",
+        ))
+    }
+
+    /// Start a capability invocation from trusted host code.
+    ///
+    /// This is an explicit host boundary. Extension code receives a
+    /// registry-created context and can only invoke capabilities through that
+    /// context, which records the immediate extension caller and checks its
+    /// declared and approved grants.
+    pub fn invoke_from_host(
         &self,
         context: &mut dyn ExtensionContext,
         capability: CapabilityId,
         operation: &str,
         input: Value,
     ) -> Result<Value, ExtensionError> {
-        let registration = self.capabilities.get(&capability).ok_or_else(|| {
-            ExtensionError::new(format!(
-                "unknown extension capability `{}`",
-                capability.as_str()
-            ))
+        let provider = self.capabilities.get(&capability).copied().ok_or_else(|| {
+            ExtensionError::new(format!("unknown extension capability `{capability}`"))
         })?;
-        registration
+        let extension_id = provider.descriptor.id;
+        tracing::info!(
+            event = "extension_capability_invocation",
+            caller_extension = "host",
+            target_extension = extension_id.as_str(),
+            capability = capability.as_str(),
+            operation = capability_operation_label(operation),
+            decision = "allow",
+            result = "started"
+        );
+        let mut scoped = RegistryInvocationContext {
+            inner: context,
+            registry: self,
+            executing_extension: extension_id,
+            caller_extension: None,
+            scope: ExtensionScope { extension_id },
+        };
+        let result = provider
             .handler
-            .invoke(context, capability, operation, input)
+            .invoke(&mut scoped, capability, operation, input);
+        log_extension_result(
+            extension_id,
+            None,
+            "host_capability",
+            LoggedOperation::Capability(capability),
+            &result,
+        );
+        result
     }
+}
+
+#[derive(Clone, Copy)]
+enum LoggedOperation<'a> {
+    /// Stable operation identifiers declared in the linked extension.
+    Static(&'a str),
+    /// Caller-supplied capability operation names are deliberately omitted.
+    Capability(CapabilityId),
+}
+
+fn logged_operation_fields(operation: LoggedOperation<'_>) -> (&str, &str) {
+    match operation {
+        LoggedOperation::Static(operation) => (operation, ""),
+        LoggedOperation::Capability(capability) => ("capability", capability.as_str()),
+    }
+}
+
+fn capability_operation_label(_caller_operation: &str) -> &'static str {
+    "capability"
+}
+
+fn log_extension_result<T>(
+    extension: ExtensionId,
+    caller: Option<ExtensionId>,
+    invocation_kind: &'static str,
+    operation: LoggedOperation<'_>,
+    result: &Result<T, ExtensionError>,
+) {
+    let (operation_name, capability_name) = logged_operation_fields(operation);
+    tracing::info!(
+        event = "extension_invocation",
+        extension_id = extension.as_str(),
+        caller_extension = caller.map(ExtensionId::as_str).unwrap_or("host"),
+        invocation_kind,
+        operation = operation_name,
+        capability = capability_name,
+        result = if result.is_ok() { "ok" } else { "error" },
+        error_kind = result
+            .as_ref()
+            .err()
+            .map(|error| format!("{:?}", error.kind())),
+    );
 }
 
 /// Error returned by an extension handler or host context.
@@ -1278,3 +1787,1081 @@ impl fmt::Display for RegistryError {
 }
 
 impl Error for RegistryError {}
+
+/// Metadata-only registry snapshot for owned extension descriptors.
+///
+/// This catalog validates and indexes declarations but stores no extension
+/// handlers and exposes no invocation method. Building or replacing a catalog
+/// never loads or dispatches downloaded code. Hosts must publish a successfully
+/// built replacement as one snapshot; a rejected replacement leaves the prior
+/// snapshot unchanged.
+#[derive(Debug, Clone)]
+pub struct OwnedExtensionRegistry {
+    generation: u64,
+    static_extensions: Vec<OwnedExtensionDescriptor>,
+    dynamic_extensions: Vec<OwnedExtensionDescriptor>,
+    ordered_extensions: Vec<OwnedExtensionDescriptor>,
+    tool_owners: HashMap<OwnedToolId, OwnedExtensionId>,
+}
+
+const MAX_OWNED_EXTENSIONS: usize = 256;
+const MAX_OWNED_TOOLS_PER_EXTENSION: usize = 128;
+const MAX_OWNED_CAPABILITIES_PER_EXTENSION: usize = 128;
+const MAX_OWNED_TOOL_DESCRIPTION_BYTES: usize = 4096;
+const MAX_OWNED_TOOL_SCHEMA_BYTES: usize = 64 * 1024;
+
+impl OwnedExtensionRegistry {
+    /// Build a metadata-only registry with no statically linked entries.
+    pub fn new(dynamic_extensions: Vec<OwnedExtensionDescriptor>) -> Result<Self, RegistryError> {
+        Self::build(Vec::new(), dynamic_extensions, 0)
+    }
+
+    /// Build a metadata-only view that checks owned descriptors against the
+    /// existing statically linked registry without changing its dispatch path.
+    pub fn with_static_registry(
+        static_registry: &ExtensionRegistry,
+        dynamic_extensions: Vec<OwnedExtensionDescriptor>,
+    ) -> Result<Self, RegistryError> {
+        let static_extensions = static_registry
+            .extensions()
+            .map(|registration| owned_descriptor_from_static(registration.descriptor))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::build(static_extensions, dynamic_extensions, 0)
+    }
+
+    /// Validate a complete replacement set before changing this snapshot.
+    /// On any validation error, the generation and existing metadata remain
+    /// unchanged. This only replaces metadata; it does not activate handlers.
+    pub fn replace_dynamic(
+        &mut self,
+        dynamic_extensions: Vec<OwnedExtensionDescriptor>,
+    ) -> Result<(), RegistryError> {
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| RegistryError::new("owned registry generation exhausted"))?;
+        let replacement = Self::build(
+            self.static_extensions.clone(),
+            dynamic_extensions,
+            generation,
+        )?;
+        *self = replacement;
+        Ok(())
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Descriptors in validated dependency order, with linkme entries included
+    /// first as the stable tie breaker for otherwise independent entries.
+    pub fn extensions(&self) -> impl Iterator<Item = &OwnedExtensionDescriptor> {
+        self.ordered_extensions.iter()
+    }
+
+    pub fn dynamic_extensions(&self) -> &[OwnedExtensionDescriptor] {
+        &self.dynamic_extensions
+    }
+
+    pub fn tool_owner(&self, tool: &OwnedToolId) -> Option<&OwnedExtensionId> {
+        self.tool_owners.get(tool)
+    }
+
+    pub fn tools(&self) -> impl Iterator<Item = (&OwnedExtensionId, &OwnedToolDescriptor)> + '_ {
+        self.ordered_extensions.iter().flat_map(|extension| {
+            extension
+                .tools()
+                .iter()
+                .map(move |tool| (extension.id(), tool))
+        })
+    }
+
+    fn build(
+        static_extensions: Vec<OwnedExtensionDescriptor>,
+        dynamic_extensions: Vec<OwnedExtensionDescriptor>,
+        generation: u64,
+    ) -> Result<Self, RegistryError> {
+        let mut extensions = static_extensions.clone();
+        extensions.extend(dynamic_extensions.iter().cloned());
+        if extensions.len() > MAX_OWNED_EXTENSIONS {
+            return Err(RegistryError::new("owned registry has too many extensions"));
+        }
+
+        let mut indexes_by_id = HashMap::new();
+        let mut providers = HashMap::<OwnedCapabilityId, usize>::new();
+        let mut tool_owners = HashMap::<OwnedToolId, OwnedExtensionId>::new();
+        for (index, extension) in extensions.iter().enumerate() {
+            if indexes_by_id
+                .insert(extension.id().clone(), index)
+                .is_some()
+            {
+                return Err(RegistryError::new(format!(
+                    "extension ID `{}` is registered more than once",
+                    extension.id()
+                )));
+            }
+            if extension.provides().len() > MAX_OWNED_CAPABILITIES_PER_EXTENSION
+                || extension.requires().len() > MAX_OWNED_CAPABILITIES_PER_EXTENSION
+                || extension.tools().len() > MAX_OWNED_TOOLS_PER_EXTENSION
+            {
+                return Err(RegistryError::new(format!(
+                    "extension `{}` declares too many tools or capabilities",
+                    extension.id()
+                )));
+            }
+
+            let mut own_providers = BTreeSet::new();
+            for capability in extension.provides() {
+                validate_owned_identifier(capability.as_str(), "capability")
+                    .map_err(|error| RegistryError::new(error.to_string()))?;
+                if !own_providers.insert(capability.clone())
+                    || providers.insert(capability.clone(), index).is_some()
+                {
+                    return Err(RegistryError::new(format!(
+                        "capability `{capability}` has more than one provider"
+                    )));
+                }
+            }
+
+            let mut own_tools = BTreeSet::new();
+            for tool in extension.tools() {
+                validate_owned_identifier(tool.id.as_str(), "tool")
+                    .map_err(|error| RegistryError::new(error.to_string()))?;
+                if tool.description.trim().is_empty()
+                    || tool.description.len() > MAX_OWNED_TOOL_DESCRIPTION_BYTES
+                {
+                    return Err(RegistryError::new(format!(
+                        "tool `{}` in extension `{}` has an invalid description",
+                        tool.id,
+                        extension.id()
+                    )));
+                }
+                if !tool.input_schema.is_object() {
+                    return Err(RegistryError::new(format!(
+                        "tool `{}` in extension `{}` has a JSON Schema that is not an object",
+                        tool.id,
+                        extension.id()
+                    )));
+                }
+                let schema_bytes = serde_json::to_vec(&tool.input_schema)
+                    .map_err(|_| RegistryError::new("tool schema could not be encoded"))?;
+                if schema_bytes.len() > MAX_OWNED_TOOL_SCHEMA_BYTES {
+                    return Err(RegistryError::new(format!(
+                        "tool `{}` in extension `{}` has an oversized JSON Schema",
+                        tool.id,
+                        extension.id()
+                    )));
+                }
+                if !own_tools.insert(tool.id.clone())
+                    || tool_owners
+                        .insert(tool.id.clone(), extension.id().clone())
+                        .is_some()
+                {
+                    return Err(RegistryError::new(format!(
+                        "tool ID `{}` is registered more than once",
+                        tool.id
+                    )));
+                }
+            }
+        }
+
+        let mut dependencies = vec![BTreeSet::<usize>::new(); extensions.len()];
+        let mut dependents = vec![Vec::<usize>::new(); extensions.len()];
+        for (index, extension) in extensions.iter().enumerate() {
+            let mut seen_requirements = BTreeSet::new();
+            for required in extension.requires() {
+                if !seen_requirements.insert(required.clone()) {
+                    return Err(RegistryError::new(format!(
+                        "extension `{}` repeats required capability `{required}`",
+                        extension.id()
+                    )));
+                }
+                let provider = providers.get(required).ok_or_else(|| {
+                    RegistryError::new(format!(
+                        "extension `{}` requires missing capability `{required}`",
+                        extension.id()
+                    ))
+                })?;
+                if *provider == index {
+                    return Err(RegistryError::new(format!(
+                        "extension `{}` requires its own capability `{required}`",
+                        extension.id()
+                    )));
+                }
+                dependencies[index].insert(*provider);
+                dependents[*provider].push(index);
+            }
+        }
+
+        let mut ready = (0..extensions.len())
+            .filter(|index| dependencies[*index].is_empty())
+            .collect::<Vec<_>>();
+        let mut ordered_extensions = Vec::with_capacity(extensions.len());
+        while !ready.is_empty() {
+            let index = ready.remove(0);
+            ordered_extensions.push(extensions[index].clone());
+            for dependent in &dependents[index] {
+                dependencies[*dependent].remove(&index);
+                if dependencies[*dependent].is_empty() && !ready.contains(dependent) {
+                    ready.push(*dependent);
+                }
+            }
+            ready.sort_unstable();
+        }
+        if ordered_extensions.len() != extensions.len() {
+            let cycle = extensions
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !dependencies[*index].is_empty())
+                .map(|(_, extension)| extension.id().as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(RegistryError::new(format!(
+                "owned extension dependency cycle detected among: {cycle}"
+            )));
+        }
+
+        Ok(Self {
+            generation,
+            static_extensions,
+            dynamic_extensions,
+            ordered_extensions,
+            tool_owners,
+        })
+    }
+}
+
+fn owned_descriptor_from_static(
+    descriptor: &ExtensionDescriptor,
+) -> Result<OwnedExtensionDescriptor, RegistryError> {
+    let tools = descriptor
+        .tools
+        .iter()
+        .map(|tool| {
+            let schema = serde_json::from_str(tool.input_schema).map_err(|_| {
+                RegistryError::new(format!(
+                    "tool `{}` in extension `{}` has invalid JSON Schema JSON",
+                    tool.id, descriptor.id
+                ))
+            })?;
+            OwnedToolDescriptor::new(tool.id.as_str(), tool.description, schema)
+                .map_err(|error| RegistryError::new(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    OwnedExtensionDescriptor::new(
+        descriptor.id.as_str(),
+        descriptor
+            .provides
+            .iter()
+            .map(|capability| capability.as_str().to_owned())
+            .collect(),
+        descriptor
+            .requires
+            .iter()
+            .map(|capability| capability.as_str().to_owned())
+            .collect(),
+        tools,
+    )
+    .map_err(|error| RegistryError::new(error.to_string()))
+}
+
+#[cfg(test)]
+mod owned_registry_tests {
+    use super::*;
+
+    struct StaticProbe;
+
+    impl ExtensionHandler for StaticProbe {
+        fn call(
+            &self,
+            _context: &mut dyn ExtensionContext,
+            _tool: ToolId,
+            _input: Value,
+        ) -> Result<Value, ExtensionError> {
+            Err(ExtensionError::unsupported(
+                "test handler is not dispatched",
+            ))
+        }
+    }
+
+    static STATIC_PROBE: StaticProbe = StaticProbe;
+    static STATIC_PROVIDES: [CapabilityId; 1] = [CapabilityId::new("cap.static")];
+    static STATIC_TOOLS: [ToolDescriptor; 1] = [ToolDescriptor {
+        id: ToolId::new("static.status"),
+        description: "Read static status",
+        input_schema: r#"{"type":"object"}"#,
+    }];
+    static STATIC_DESCRIPTOR: ExtensionDescriptor = ExtensionDescriptor {
+        id: ExtensionId::new("org.example.static"),
+        provides: &STATIC_PROVIDES,
+        requires: &[],
+        tools: &STATIC_TOOLS,
+    };
+    static STATIC_REGISTRATION: ExtensionRegistration = ExtensionRegistration {
+        descriptor: &STATIC_DESCRIPTOR,
+        handler: &STATIC_PROBE,
+    };
+
+    fn tool(id: &str) -> OwnedToolDescriptor {
+        OwnedToolDescriptor::new(id, "A generic tool", serde_json::json!({"type":"object"}))
+            .unwrap()
+    }
+
+    fn extension(
+        id: &str,
+        provides: &[&str],
+        requires: &[&str],
+        tools: &[&str],
+    ) -> OwnedExtensionDescriptor {
+        OwnedExtensionDescriptor::new(
+            id,
+            provides.iter().map(|item| (*item).to_owned()).collect(),
+            requires.iter().map(|item| (*item).to_owned()).collect(),
+            tools.iter().map(|item| tool(item)).collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn owned_ids_accept_runtime_strings_and_reject_invalid_identifiers() {
+        let runtime_id = format!("org.example.{}", "downloaded");
+        assert_eq!(
+            OwnedExtensionId::try_new(runtime_id).unwrap().as_str(),
+            "org.example.downloaded"
+        );
+        assert!(OwnedToolId::try_new("tool with spaces").is_err());
+        assert!(OwnedCapabilityId::try_new("../outside").is_err());
+    }
+
+    #[test]
+    fn owned_registry_rejects_duplicate_extension_and_tool_ids() {
+        assert!(OwnedExtensionRegistry::new(vec![
+            extension("org.example.one", &["cap.one"], &[], &["shared.tool"]),
+            extension("org.example.one", &["cap.two"], &[], &["second.tool"]),
+        ])
+        .is_err());
+
+        assert!(OwnedExtensionRegistry::new(vec![
+            extension("org.example.one", &["cap.one"], &[], &["shared.tool"]),
+            extension("org.example.two", &["cap.two"], &[], &["shared.tool"]),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn owned_registry_includes_static_metadata_and_orders_dependencies() {
+        let static_registry = ExtensionRegistry::new(vec![&STATIC_REGISTRATION]).unwrap();
+        let registry = OwnedExtensionRegistry::with_static_registry(
+            &static_registry,
+            vec![extension(
+                "org.example.dynamic",
+                &["cap.dynamic"],
+                &["cap.static"],
+                &["dynamic.status"],
+            )],
+        )
+        .unwrap();
+
+        let order = registry
+            .extensions()
+            .map(|entry| entry.id().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(order, ["org.example.static", "org.example.dynamic"]);
+        let static_tool = OwnedToolId::try_new("static.status").unwrap();
+        assert_eq!(
+            registry.tool_owner(&static_tool).unwrap().as_str(),
+            "org.example.static"
+        );
+        assert_eq!(registry.tools().count(), 2);
+    }
+
+    #[test]
+    fn owned_registry_rejects_missing_dependencies_and_cycles() {
+        assert!(OwnedExtensionRegistry::new(vec![extension(
+            "org.example.orphan",
+            &["cap.orphan"],
+            &["cap.missing"],
+            &[],
+        )])
+        .is_err());
+
+        assert!(OwnedExtensionRegistry::new(vec![
+            extension("org.example.one", &["cap.one"], &["cap.two"], &[]),
+            extension("org.example.two", &["cap.two"], &["cap.one"], &[]),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn replacement_is_validate_before_publish_and_increments_generation() {
+        let mut registry = OwnedExtensionRegistry::new(vec![extension(
+            "org.example.initial",
+            &["cap.initial"],
+            &[],
+            &["initial.tool"],
+        )])
+        .unwrap();
+        let initial_tool = OwnedToolId::try_new("initial.tool").unwrap();
+        let next_tool = OwnedToolId::try_new("next.tool").unwrap();
+
+        assert!(registry
+            .replace_dynamic(vec![
+                extension("org.example.duplicate", &["cap.one"], &[], &[]),
+                extension("org.example.duplicate", &["cap.two"], &[], &[]),
+            ])
+            .is_err());
+        assert_eq!(registry.generation(), 0);
+        assert!(registry.tool_owner(&initial_tool).is_some());
+        assert!(registry.tool_owner(&next_tool).is_none());
+
+        registry
+            .replace_dynamic(vec![extension(
+                "org.example.next",
+                &["cap.next"],
+                &[],
+                &["next.tool"],
+            )])
+            .unwrap();
+        assert_eq!(registry.generation(), 1);
+        assert!(registry.tool_owner(&initial_tool).is_none());
+        assert_eq!(
+            registry.tool_owner(&next_tool).unwrap().as_str(),
+            "org.example.next"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct Probe {
+        name: &'static str,
+        log: Arc<Mutex<Vec<String>>>,
+        fail_initialize: bool,
+        fail_shutdown: bool,
+    }
+
+    impl ExtensionHandler for Probe {
+        fn initialize(&self) -> Result<(), ExtensionError> {
+            self.log.lock().unwrap().push(format!("init:{}", self.name));
+            if self.fail_initialize {
+                Err(ExtensionError::new(format!("init:{}", self.name)))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn shutdown(&self) -> Result<(), ExtensionError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("shutdown:{}", self.name));
+            if self.fail_shutdown {
+                Err(ExtensionError::new(format!("shutdown:{}", self.name)))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn call(
+            &self,
+            _context: &mut dyn ExtensionContext,
+            _tool: ToolId,
+            _input: Value,
+        ) -> Result<Value, ExtensionError> {
+            Err(ExtensionError::unsupported("not used in lifecycle tests"))
+        }
+    }
+
+    fn registration(
+        name: &'static str,
+        capability: &'static str,
+        requirement: Option<&'static str>,
+        log: Arc<Mutex<Vec<String>>>,
+        fail_initialize: bool,
+        fail_shutdown: bool,
+    ) -> &'static ExtensionRegistration {
+        let provides: &'static [CapabilityId] =
+            Box::leak(vec![CapabilityId::new(capability)].into_boxed_slice());
+        let requires: &'static [CapabilityId] = match requirement {
+            Some(required) => Box::leak(vec![CapabilityId::new(required)].into_boxed_slice()),
+            None => Box::leak(Vec::new().into_boxed_slice()),
+        };
+        let descriptor = Box::leak(Box::new(ExtensionDescriptor {
+            id: ExtensionId::new(name),
+            provides,
+            requires,
+            tools: &[],
+        }));
+        let handler = Box::leak(Box::new(Probe {
+            name,
+            log,
+            fail_initialize,
+            fail_shutdown,
+        }));
+        Box::leak(Box::new(ExtensionRegistration {
+            descriptor,
+            handler,
+        }))
+    }
+
+    #[test]
+    fn initializes_once_in_dependency_order_and_shuts_down_in_reverse() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let provider = registration("provider", "cap.provider", None, log.clone(), false, false);
+        let dependent = registration(
+            "dependent",
+            "cap.dependent",
+            Some("cap.provider"),
+            log.clone(),
+            false,
+            false,
+        );
+        let registry = ExtensionRegistry::new(vec![dependent, provider]).unwrap();
+
+        registry.initialize().unwrap();
+        registry.initialize().unwrap();
+        registry.shutdown().unwrap();
+        registry.shutdown().unwrap();
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "init:provider",
+                "init:dependent",
+                "shutdown:dependent",
+                "shutdown:provider",
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_initialization_rolls_back_and_is_terminal() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let provider = registration("provider", "cap.provider", None, log.clone(), false, false);
+        let dependent = registration(
+            "dependent",
+            "cap.dependent",
+            Some("cap.provider"),
+            log.clone(),
+            true,
+            false,
+        );
+        let registry = ExtensionRegistry::new(vec![dependent, provider]).unwrap();
+
+        let error = registry.initialize().unwrap_err();
+        assert_eq!(error.message(), "init:dependent");
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["init:provider", "init:dependent", "shutdown:provider"]
+        );
+
+        assert_eq!(
+            registry.initialize().unwrap_err().message(),
+            "init:dependent"
+        );
+        registry.shutdown().unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["init:provider", "init:dependent", "shutdown:provider"]
+        );
+    }
+
+    #[test]
+    fn shutdown_attempts_every_hook_and_caches_first_error() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let provider = registration("provider", "cap.provider", None, log.clone(), false, true);
+        let dependent = registration(
+            "dependent",
+            "cap.dependent",
+            Some("cap.provider"),
+            log.clone(),
+            false,
+            true,
+        );
+        let registry = ExtensionRegistry::new(vec![dependent, provider]).unwrap();
+        registry.initialize().unwrap();
+
+        let error = registry.shutdown().unwrap_err();
+        assert_eq!(error.message(), "shutdown:dependent");
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "init:provider",
+                "init:dependent",
+                "shutdown:dependent",
+                "shutdown:provider",
+            ]
+        );
+
+        assert_eq!(
+            registry.shutdown().unwrap_err().message(),
+            "shutdown:dependent"
+        );
+        assert_eq!(log.lock().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn shutdown_before_initialization_prevents_later_initialization() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let extension = registration(
+            "extension",
+            "cap.extension",
+            None,
+            log.clone(),
+            false,
+            false,
+        );
+        let registry = ExtensionRegistry::new(vec![extension]).unwrap();
+
+        registry.shutdown().unwrap();
+        let error = registry.initialize().unwrap_err();
+
+        assert_eq!(error.kind(), ExtensionErrorKind::Conflict);
+        assert!(log.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod invocation_security_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn capability_operation_logs_use_a_bounded_label_not_caller_text() {
+        let caller_supplied_operation = "sentinel-user-payload-".repeat(512);
+        let capability = CapabilityId::new("audit.safe.capability");
+        let (operation_label, capability_label) =
+            logged_operation_fields(LoggedOperation::Capability(capability));
+
+        assert_eq!(operation_label, "capability");
+        assert_eq!(capability_label, "audit.safe.capability");
+        assert_eq!(
+            capability_operation_label(&caller_supplied_operation),
+            "capability"
+        );
+        assert!(caller_supplied_operation.len() > 10_000);
+    }
+
+    #[test]
+    fn default_capability_error_does_not_echo_caller_operation() {
+        struct DefaultInvoke;
+        impl ExtensionHandler for DefaultInvoke {
+            fn call(
+                &self,
+                _context: &mut dyn ExtensionContext,
+                _tool: ToolId,
+                _input: Value,
+            ) -> Result<Value, ExtensionError> {
+                Ok(Value::Null)
+            }
+        }
+
+        let sentinel = "sensitive-request-payload".repeat(128);
+        let mut context = host_context(Arc::new(Mutex::new(Vec::new())));
+        let error = DefaultInvoke
+            .invoke(
+                &mut context,
+                CapabilityId::new("audit.safe.capability"),
+                &sentinel,
+                Value::Null,
+            )
+            .unwrap_err();
+
+        assert!(!error.message().contains(&sentinel));
+        assert_eq!(
+            error.message(),
+            "extension does not implement the requested capability operation"
+        );
+    }
+
+    #[derive(Default)]
+    struct EmptyDocuments;
+    impl ScopedDocumentStore for EmptyDocuments {
+        fn get(&self, _id: &str) -> Result<Option<ExtensionDocument>, ExtensionError> {
+            Ok(None)
+        }
+        fn list(&self, _kind: Option<&str>) -> Result<Vec<ExtensionDocument>, ExtensionError> {
+            Ok(Vec::new())
+        }
+        fn put_batch(&mut self, _documents: Vec<ExtensionDocument>) -> Result<(), ExtensionError> {
+            Ok(())
+        }
+    }
+
+    struct HostContext {
+        documents: EmptyDocuments,
+        provider: String,
+        scopes: Arc<Mutex<Vec<String>>>,
+    }
+    impl ExtensionContext for HostContext {
+        fn owner(&self) -> &str {
+            "owner-fixed"
+        }
+        fn workspace(&self) -> &str {
+            "workspace-fixed"
+        }
+        fn documents(&mut self) -> &mut dyn ScopedDocumentStore {
+            &mut self.documents
+        }
+        fn scoped_documents(&mut self, scope: &ExtensionScope) -> &mut dyn ScopedDocumentStore {
+            self.scopes
+                .lock()
+                .unwrap()
+                .push(scope.extension_id().as_str().to_owned());
+            &mut self.documents
+        }
+        fn invocation_identity(&self) -> InvocationIdentity<'_> {
+            InvocationIdentity {
+                provider: &self.provider,
+                principal: None,
+                caller_extension: None,
+            }
+        }
+        fn invoke(
+            &mut self,
+            _capability: CapabilityId,
+            _operation: &str,
+            _input: Value,
+        ) -> Result<Value, ExtensionError> {
+            Err(ExtensionError::new(
+                "host context must not dispatch directly",
+            ))
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProbeAction {
+        Call(CapabilityId),
+        ObserveAndCall(CapabilityId),
+        Observe,
+    }
+    struct Probe {
+        action: ProbeAction,
+        callers: Arc<Mutex<Vec<Option<ExtensionId>>>>,
+        routes: &'static [ExtensionRouteDescriptor],
+    }
+    impl ExtensionHandler for Probe {
+        fn http_routes(&self) -> &'static [ExtensionRouteDescriptor] {
+            self.routes
+        }
+        fn call(
+            &self,
+            context: &mut dyn ExtensionContext,
+            _tool: ToolId,
+            _input: Value,
+        ) -> Result<Value, ExtensionError> {
+            context.documents().list(None)?;
+            match self.action {
+                ProbeAction::Call(capability) => context.invoke(capability, "probe", Value::Null),
+                _ => Ok(Value::Null),
+            }
+        }
+        fn invoke(
+            &self,
+            context: &mut dyn ExtensionContext,
+            _capability: CapabilityId,
+            _operation: &str,
+            _input: Value,
+        ) -> Result<Value, ExtensionError> {
+            self.callers
+                .lock()
+                .unwrap()
+                .push(context.invocation_identity().caller_extension);
+            context.documents().list(None)?;
+            match self.action {
+                ProbeAction::ObserveAndCall(capability) => {
+                    context.invoke(capability, "probe", Value::Null)
+                }
+                ProbeAction::Observe => Ok(Value::Null),
+                ProbeAction::Call(capability) => context.invoke(capability, "probe", Value::Null),
+            }
+        }
+
+        fn handle_http(
+            &self,
+            context: &mut dyn ExtensionContext,
+            _route: RouteId,
+            _request: ExtensionHttpRequest,
+        ) -> Result<ExtensionHttpResponse, ExtensionError> {
+            self.callers
+                .lock()
+                .unwrap()
+                .push(context.invocation_identity().caller_extension);
+            context.documents().list(None)?;
+            Ok(ExtensionHttpResponse::json(200, Value::Null))
+        }
+    }
+
+    fn register(
+        id: &'static str,
+        provides: &[&'static str],
+        requires: &[&'static str],
+        tool: Option<&'static str>,
+        action: ProbeAction,
+        callers: Arc<Mutex<Vec<Option<ExtensionId>>>>,
+        _scopes: Arc<Mutex<Vec<String>>>,
+    ) -> &'static ExtensionRegistration {
+        let mut provides = provides
+            .iter()
+            .map(|id| CapabilityId::new(id))
+            .collect::<Vec<_>>();
+        if provides.is_empty() {
+            provides.push(CapabilityId::new(match id {
+                "deny-caller" => "deny.caller.self",
+                "frame-a" => "frame.cap.a",
+                "serial-probe" => "serial.cap",
+                _ => "probe.self",
+            }));
+        }
+        let provides = Box::leak(provides.into_boxed_slice());
+        let requires = Box::leak(
+            requires
+                .iter()
+                .map(|id| CapabilityId::new(id))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let tools = tool
+            .map(|id| {
+                Box::leak(
+                    vec![ToolDescriptor {
+                        id: ToolId::new(id),
+                        description: "probe",
+                        input_schema: r#"{"type":"object"}"#,
+                    }]
+                    .into_boxed_slice(),
+                ) as &'static [ToolDescriptor]
+            })
+            .unwrap_or(&[]);
+        let descriptor = Box::leak(Box::new(ExtensionDescriptor {
+            id: ExtensionId::new(id),
+            provides,
+            requires,
+            tools,
+        }));
+        let handler = Box::leak(Box::new(Probe {
+            action,
+            callers,
+            routes: &[],
+        }));
+        Box::leak(Box::new(ExtensionRegistration {
+            descriptor,
+            handler,
+        }))
+    }
+
+    fn host_context(scopes: Arc<Mutex<Vec<String>>>) -> HostContext {
+        HostContext {
+            documents: EmptyDocuments,
+            provider: "trusted-transport".into(),
+            scopes,
+        }
+    }
+
+    #[test]
+    fn nested_calls_require_both_declared_and_host_approved_grants() {
+        for (required, approved) in [(false, true), (true, false)] {
+            let callers = Arc::new(Mutex::new(Vec::new()));
+            let scopes = Arc::new(Mutex::new(Vec::new()));
+            let caller = register(
+                "deny-caller",
+                &[],
+                if required { &["deny.cap"] } else { &[] },
+                Some("deny.tool"),
+                ProbeAction::Call(CapabilityId::new("deny.cap")),
+                callers.clone(),
+                scopes.clone(),
+            );
+            let provider = register(
+                "deny-provider",
+                &["deny.cap"],
+                &[],
+                None,
+                ProbeAction::Observe,
+                callers.clone(),
+                scopes.clone(),
+            );
+            let approved = if approved {
+                HashMap::from([(
+                    ExtensionId::new("deny-caller"),
+                    BTreeSet::from([CapabilityId::new("deny.cap")]),
+                )])
+            } else {
+                HashMap::new()
+            };
+            let registry =
+                ExtensionRegistry::new_with_approved_capabilities(vec![caller, provider], approved)
+                    .unwrap();
+            let mut context = host_context(scopes);
+            let error = registry
+                .call_named(&mut context, "deny.tool", Value::Null)
+                .unwrap_err();
+            assert_eq!(error.kind(), ExtensionErrorKind::Forbidden);
+        }
+    }
+
+    #[test]
+    fn context_free_invoke_is_denied_and_host_entry_is_explicit() {
+        let callers = Arc::new(Mutex::new(Vec::new()));
+        let scopes = Arc::new(Mutex::new(Vec::new()));
+        let provider = register(
+            "host-entry-provider",
+            &["host.entry.cap"],
+            &[],
+            None,
+            ProbeAction::Observe,
+            callers.clone(),
+            scopes.clone(),
+        );
+        let registry = ExtensionRegistry::new(vec![provider]).unwrap();
+
+        let mut context = host_context(scopes.clone());
+        let error = registry
+            .invoke(
+                &mut context,
+                CapabilityId::new("host.entry.cap"),
+                "probe",
+                Value::Null,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), ExtensionErrorKind::Forbidden);
+        assert!(scopes.lock().unwrap().is_empty());
+
+        registry
+            .invoke_from_host(
+                &mut context,
+                CapabilityId::new("host.entry.cap"),
+                "probe",
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(*callers.lock().unwrap(), [None]);
+        assert_eq!(*scopes.lock().unwrap(), ["host-entry-provider"]);
+    }
+
+    #[test]
+    fn caller_identity_and_document_namespace_change_at_every_hop() {
+        let callers = Arc::new(Mutex::new(Vec::new()));
+        let scopes = Arc::new(Mutex::new(Vec::new()));
+        let a = register(
+            "frame-a",
+            &[],
+            &["frame.cap.b"],
+            Some("frame.tool"),
+            ProbeAction::Call(CapabilityId::new("frame.cap.b")),
+            callers.clone(),
+            scopes.clone(),
+        );
+        let b = register(
+            "frame-b",
+            &["frame.cap.b"],
+            &["frame.cap.c"],
+            None,
+            ProbeAction::ObserveAndCall(CapabilityId::new("frame.cap.c")),
+            callers.clone(),
+            scopes.clone(),
+        );
+        let c = register(
+            "frame-c",
+            &["frame.cap.c"],
+            &[],
+            None,
+            ProbeAction::Observe,
+            callers.clone(),
+            scopes.clone(),
+        );
+        let approved = HashMap::from([
+            (
+                ExtensionId::new("frame-a"),
+                BTreeSet::from([CapabilityId::new("frame.cap.b")]),
+            ),
+            (
+                ExtensionId::new("frame-b"),
+                BTreeSet::from([CapabilityId::new("frame.cap.c")]),
+            ),
+        ]);
+        let registry =
+            ExtensionRegistry::new_with_approved_capabilities(vec![a, b, c], approved).unwrap();
+        let mut context = host_context(scopes.clone());
+        registry
+            .call_named(&mut context, "frame.tool", Value::Null)
+            .unwrap();
+        assert_eq!(
+            *callers.lock().unwrap(),
+            [
+                Some(ExtensionId::new("frame-a")),
+                Some(ExtensionId::new("frame-b"))
+            ]
+        );
+        assert_eq!(*scopes.lock().unwrap(), ["frame-a", "frame-b", "frame-c"]);
+    }
+
+    #[test]
+    fn extension_tool_mutability_metadata_cannot_opt_out_of_serialization() {
+        let callers = Arc::new(Mutex::new(Vec::new()));
+        let scopes = Arc::new(Mutex::new(Vec::new()));
+        let registration = register(
+            "serial-probe",
+            &[],
+            &[],
+            Some("serial.tool"),
+            ProbeAction::Observe,
+            callers,
+            scopes,
+        );
+        let registry = ExtensionRegistry::new(vec![registration]).unwrap();
+        assert_eq!(registry.tool_is_mutating_name("serial.tool"), Some(true));
+    }
+
+    #[test]
+    fn http_route_dispatch_uses_registry_created_identity_and_document_scope() {
+        let callers = Arc::new(Mutex::new(Vec::new()));
+        let scopes = Arc::new(Mutex::new(Vec::new()));
+        let route = Box::leak(Box::new(ExtensionRouteDescriptor {
+            id: RouteId::new("route.probe"),
+            method: HttpMethod::Get,
+            path: "/probe",
+            mutates: false,
+        }));
+        let routes = Box::leak(vec![*route].into_boxed_slice());
+        let descriptor = Box::leak(Box::new(ExtensionDescriptor {
+            id: ExtensionId::new("route-probe"),
+            provides: Box::leak(vec![CapabilityId::new("route.probe.cap")].into_boxed_slice()),
+            requires: &[],
+            tools: &[],
+        }));
+        let handler = Box::leak(Box::new(Probe {
+            action: ProbeAction::Observe,
+            callers: callers.clone(),
+            routes,
+        }));
+        let registration = Box::leak(Box::new(ExtensionRegistration {
+            descriptor,
+            handler,
+        }));
+        let registry = ExtensionRegistry::new(vec![registration]).unwrap();
+        let matched = registry
+            .match_http_route(HttpMethod::Get, "/probe")
+            .unwrap();
+        assert!(!matched.mutates());
+        assert!(matched.requires_serialization());
+        let mut context = host_context(scopes.clone());
+        let response = registry
+            .call_http_route(
+                &mut context,
+                &matched,
+                ExtensionHttpRequest {
+                    path_params: Default::default(),
+                    query: Default::default(),
+                    body: Value::Null,
+                },
+            )
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(*callers.lock().unwrap(), [None]);
+        assert_eq!(*scopes.lock().unwrap(), ["route-probe"]);
+    }
+}
