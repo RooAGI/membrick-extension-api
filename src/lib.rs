@@ -76,7 +76,7 @@
 
 pub use linkme::distributed_slice;
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::sync::Mutex;
@@ -682,6 +682,29 @@ pub trait ExtensionHandler: Sync {
         )))
     }
 
+    /// Kinds of records this extension adopts from a host's storage written
+    /// before the extension owned them. A host matches a stored record's
+    /// `filters.doc_kind` against these values. Each kind may be claimed by
+    /// only one extension.
+    fn legacy_record_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Convert one legacy host record into a document in this extension's
+    /// scope. `record` is the host's stored record serialized as JSON with
+    /// `doc_id`, `content` and `filters`. Return `Ok(None)` for a record
+    /// outside the `owner`/`workspace` scope, which the host then leaves in
+    /// place. The host writes returned documents through the extension's
+    /// scoped store, so the extension cannot widen its scope here.
+    fn adopt_legacy_record(
+        &self,
+        _owner: &str,
+        _workspace: &str,
+        _record: &Value,
+    ) -> Result<Option<ExtensionDocument>, ExtensionError> {
+        Ok(None)
+    }
+
     fn call(
         &self,
         context: &mut dyn ExtensionContext,
@@ -1211,6 +1234,25 @@ impl ExtensionRegistry {
     /// Extensions in deterministic dependency order.
     pub fn extensions(&self) -> impl Iterator<Item = &'static ExtensionRegistration> + '_ {
         self.ordered.iter().copied()
+    }
+
+    /// The extension that adopts each legacy record kind, in dependency
+    /// order. Fails when two extensions claim the same kind.
+    pub fn legacy_record_adopters(
+        &self,
+    ) -> Result<BTreeMap<&'static str, &'static ExtensionRegistration>, ExtensionError> {
+        let mut adopters = BTreeMap::new();
+        for registration in self.extensions() {
+            for &kind in registration.handler.legacy_record_kinds() {
+                if let Some(previous) = adopters.insert(kind, registration) {
+                    return Err(ExtensionError::new(format!(
+                        "legacy record kind `{kind}` is claimed by both `{}` and `{}`",
+                        previous.descriptor.id, registration.descriptor.id
+                    )));
+                }
+            }
+        }
+        Ok(adopters)
     }
 
     /// Capabilities declared by registered extensions, in deterministic
