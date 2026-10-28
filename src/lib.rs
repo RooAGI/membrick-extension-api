@@ -1067,7 +1067,7 @@ impl ExtensionRegistry {
                 }
                 routes.push(RegisteredRoute {
                     descriptor: route,
-                    registration: *registration,
+                    registration,
                     segments,
                 });
             }

@@ -4,6 +4,11 @@ version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Generic compiled-in extension contract for Membrick hosts"
+repository = "https://github.com/RooAGI/membrick-extension-api"
+documentation = "https://docs.rs/membrick-extension-api"
+readme = "README.md"
+keywords = ["membrick", "extension", "plugin", "agent", "memory"]
+categories = ["api-bindings"]
 
 [dependencies]
 linkme = "0.3"
