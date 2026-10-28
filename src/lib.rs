@@ -385,6 +385,15 @@ pub trait ScopedDocumentStore {
 pub trait ExtensionContext {
     fn owner(&self) -> &str;
     fn workspace(&self) -> &str;
+    /// Trusted optional session metadata for this invocation.
+    ///
+    /// Hosts must derive this from transport/session context rather than
+    /// adding it to, or reading it from, extension tool arguments. Extensions
+    /// may use it for session-scoped defaults while receiving the caller's
+    /// JSON unchanged. The default preserves source compatibility.
+    fn session_id(&self) -> Option<&str> {
+        None
+    }
     /// Trusted host attribution for the current invocation.
     ///
     /// The default preserves source compatibility for hosts that do not yet
